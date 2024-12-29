@@ -20,13 +20,14 @@ def gaussian_kernel(samples_x, samples_y, h = -1, get_width = False, detach=Fals
     else:
         return kxy
 
-def matrix_kernel(samples_x, samples_y, h = -1, get_width = False, detach=False):
+def matrix_kernel(samples_x, samples_y, anchor = torch.tensor([0]), h = -1, get_width = False, detach=False):
     '''
     samples_x: shape = [n,d]
     samples_y: shape = [n,d]
     '''
     n = samples_x.shape[0]
     d = samples_x.shape[1]
+    m = anchor.shape[0] # size of anchor points
 
     with torch.autograd.set_detect_anomaly(True):
         def Hessian(X): # X with shape [n,d]; return the negative Hessian of p(x) for STAR_SHAPED
@@ -84,40 +85,78 @@ def matrix_kernel(samples_x, samples_y, h = -1, get_width = False, detach=False)
             return p4-p5
     
         # print(x_Hessian(samples_x)[0])
+        # print(anchor)
+
+# -------------------------------------------- for-loop code (unfinished)---------------------------------------------------------
+        '''
+        kxy = np.zeros((n, n, d, d))
+        Q = x_Hessian(anchor) # shape = [m, d, d]
+
+        for l in range(m):
+            Ql = Q[l].unsqueeze(0).unsqueeze(1)
+            tmp = samples_x[:, None, :] - samples_y[None, :, :]
+            # tmp2 = torch.matmul(tmp.unsqueeze(2), tmp.unsqueeze(3)) # same as gaussian kernel
+            tmp2 = torch.matmul(tmp.unsqueeze(2), torch.matmul(Ql, tmp.unsqueeze(3))) # shape = [n, n, 1, 1]
+            
+            h = torch.median(tmp2)
+            h = torch.sqrt(0.5 * h /np.log(n + 1))
+
+            kxy_l = torch.exp(- tmp2/ h**2 / 2) * torch.eye(d)
+            kxy_l = torch.matmul(torch.inverse(Q).unsqueeze(0).unsqueeze(1), kxy_l) # shape = [n, n, d, d]
+
+            
+            pairwise_x = anchor[:, None, :] - samples_x[None, :, :] # shape = [m, n, d]       
+            aux = -torch.matmul(pairwise_x.unsqueeze(2), torch.matmul(Q_list.unsqueeze(1), pairwise_x.unsqueeze(3))).squeeze()/2 + torch.log(torch.det(Q_list)).unsqueeze(1) # shape = [m, n]
+            w_list = torch.nn.functional.softmax(aux, dim=0) # shape = [m, n]; meaning w_l(x_j) for l,j in 1st, 2nd component 
         
+            pairwise_y = anchor[:, None, :] - samples_y[None, :, :] # shape = [m, n, d]       
+            aux_y = -torch.matmul(pairwise_y.unsqueeze(2), torch.matmul(Q_list.unsqueeze(1), pairwise_y.unsqueeze(3))).squeeze()/2 + torch.log(torch.det(Q_list)).unsqueeze(1) # shape = [m, n]
+            w_list_y = torch.nn.functional.softmax(aux_y, dim=0) # shape = [m, n]; meaning w_l(y_j) for l,j in 1st, 2nd component 
+
+            
+
+        return kxy
+        '''
+# -------------------------------------------- for-loop code (unfinished)---------------------------------------------------------
+
+
         pairwise = samples_x[:, None, :] - samples_y[None, :, :] # shape = [n, n, d]
-        Q_list = (x_Hessian(samples_x)/2 + x_Hessian(samples_y)/2).detach()
-        # Q_list = (Hessian(samples_x)/2 + Hessian(samples_y)/2).detach() # shape = [n, d, d]
+        Q_list = Hessian(anchor).detach() # shape = [m, d, d]
+        # Q_list = (Hessian(samples_x)/2 + Hessian(samples_y)/2).detach() 
     
         # Calculate w_list
-        pairwise_x = samples_x[:, None, :] - samples_x[None, :, :] # shape = [n, n, d]       
-        aux = -torch.matmul(pairwise_x.unsqueeze(2), torch.matmul(Q_list.unsqueeze(1), pairwise_x.unsqueeze(3))).squeeze()/2 + torch.log(torch.det(Q_list)).unsqueeze(1)
-        w_list = torch.nn.functional.softmax(aux, dim=1) # shape = [n, n]; meaning w_l(x_j) for l,j in 1st, 2nd component 
+        pairwise_x = anchor[:, None, :] - samples_x[None, :, :] # shape = [m, n, d]       
+        aux = -torch.matmul(pairwise_x.unsqueeze(2), torch.matmul(Q_list.unsqueeze(1), pairwise_x.unsqueeze(3))).squeeze()/2 + torch.log(torch.det(Q_list)).unsqueeze(1) # shape = [m, n]
+        w_list = torch.nn.functional.softmax(aux, dim=0) # shape = [m, n]; meaning w_l(x_j) for l,j in 1st, 2nd component 
+        
+        pairwise_y = anchor[:, None, :] - samples_y[None, :, :] # shape = [m, n, d]       
+        aux_y = -torch.matmul(pairwise_y.unsqueeze(2), torch.matmul(Q_list.unsqueeze(1), pairwise_y.unsqueeze(3))).squeeze()/2 + torch.log(torch.det(Q_list)).unsqueeze(1) # shape = [m, n]
+        w_list_y = torch.nn.functional.softmax(aux_y, dim=0) # shape = [m, n]; meaning w_l(y_j) for l,j in 1st, 2nd component 
 
         # Calculate K_QL
-        kernelL = torch.matmul(pairwise.unsqueeze(0).unsqueeze(3), torch.matmul(Q_list.unsqueeze(1).unsqueeze(2), pairwise.unsqueeze(0).unsqueeze(4))).squeeze() # shape = [n, n, n]
+        kernelL = torch.matmul(pairwise.unsqueeze(0).unsqueeze(3), torch.matmul(Q_list.unsqueeze(1).unsqueeze(2), pairwise.unsqueeze(0).unsqueeze(4))).squeeze() # shape = [m, n, n]
         if h < 0: # use the median trick
             if detach:
-                h = torch.median(kernelL.view((n, n*n)), dim=1)[0].detach()
+                h = torch.median(kernelL.view((m, n*n)), dim=1)[0].detach()
             else:
-                h = torch.median(kernelL.view((n, n*n)), dim=1)[0]
+                h = torch.median(kernelL.view((m, n*n)), dim=1)[0]
 
         with torch.no_grad():
-            h = h / np.log(n+1) / 2 # shape = [n]
+            h = h / np.log(n+1) / 2 # shape = [m]
             h = h.clone().detach().unsqueeze(1).unsqueeze(2)
 
-        u = torch.exp(- kernelL / (h) / 2).unsqueeze(3).unsqueeze(4) # shape = [n, n, n, 1, 1]
-        kxy_tmp = u * torch.eye(d) # shape = [n, n, n, d, d]
-        kxy_i = torch.matmul(torch.linalg.inv(Q_list).unsqueeze(1).unsqueeze(2), kxy_tmp) # shape = [n, n, n, d, d]
+        u = torch.exp(- kernelL / (h) / 2).unsqueeze(3).unsqueeze(4) # shape = [m, n, n, 1, 1]
+        kxy_tmp = u * torch.eye(d) # shape = [m, n, n, d, d]
+        kxy_i = torch.matmul(torch.linalg.inv(Q_list).unsqueeze(1).unsqueeze(2), kxy_tmp) # shape = [m, n, n, d, d]
 
         # Final calculation
-        wL_i = w_list.unsqueeze(2) * w_list.unsqueeze(1) # shape = [n, n, n]        
-        wL_i = wL_i.unsqueeze(3).unsqueeze(4) * torch.eye(d) # shape = [n, n, n, 1, 1]
-        kxy = torch.matmul(kxy_i, wL_i) # shape = [n, n, n, d, d]
+        wL_i = w_list.unsqueeze(2) * w_list_y.unsqueeze(1) # shape = [m, n, n]        
+        wL_i = wL_i.unsqueeze(3).unsqueeze(4) * torch.eye(d) # shape = [m, n, n, 1, 1] -> [m, n, n, d, d] after multiplying eye(d)
+        kxy = torch.matmul(kxy_i, wL_i) # shape = [m, n, n, d, d]
         kxy = torch.sum(kxy, dim=0).squeeze()
         return kxy # shape = [n, n, d, d]
     
-# ------------------old codes-----------------------------------------------------------------
+# ------------------old codes (constant pre-conditioning)-----------------------------------------------------------------
 
     Q1 = Hessian(samples_x).mean(dim=0).squeeze() #.detach()
     Q2 = Hessian(samples_y).mean(dim=0).squeeze() #.detach()
@@ -146,8 +185,6 @@ def matrix_kernel(samples_x, samples_y, h = -1, get_width = False, detach=False)
         return kxy, h 
     else:
         return kxy # shape (n,n,d,d)
-
-
 
 
 
